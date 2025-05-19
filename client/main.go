@@ -9,134 +9,117 @@ import (
 	"time"
 )
 
-func connectAndWork(modeChoice string, ip string, port string, reader *bufio.Reader) bool {
-	conn, err := net.Dial("tcp", ip+":"+port)
-	if err != nil {
-		fmt.Println("Ошибка подключения:", err)
-		return false
-	}
-	defer conn.Close()
-
-	fmt.Println("Подключено к", ip+":"+port)
-
-	switch modeChoice {
-	case "2":
-		_, err := conn.Write([]byte("mode:periodic"))
+func connectAndWork(modeChoice, ip, port string) {
+	for {
+		conn, err := net.Dial("tcp", ip+":"+port)
 		if err != nil {
-			fmt.Println("Ошибка отправки режима")
-			return true
+			fmt.Println("Ошибка подключения:", err)
+			time.Sleep(2 * time.Second)
+			continue
 		}
-	case "3":
-		_, err := conn.Write([]byte("mode:push"))
-		if err != nil {
-			fmt.Println("Ошибка отправки режима")
-			return true
-		}
-	default:
-		modeChoice = "1"
-		_, err := conn.Write([]byte("mode:manual"))
-		if err != nil {
-			fmt.Println("Ошибка отправки режима")
-			return true
-		}
-		fmt.Println("Режим: ручной")
-	}
 
-	done := make(chan struct{})
-	input := make(chan struct{})
-	stopInput := make(chan struct{})
+		fmt.Println("Подключено к", ip+":"+port)
 
-	go func() {
-		defer func() {
-			fmt.Println("Соединение закрыто (сервер отключился или произошла ошибка).")
-			close(done)
-			close(stopInput)
+		switch modeChoice {
+		case "2":
+			conn.Write([]byte("mode:periodic"))
+		case "3":
+			conn.Write([]byte("mode:push"))
+		default:
+			modeChoice = "1"
+			conn.Write([]byte("mode:manual"))
+			fmt.Println("Режим: ручной")
+		}
+
+		done := make(chan struct{})
+		input := make(chan struct{})
+		stopInput := make(chan struct{})
+
+		go func() {
+			defer func() {
+				fmt.Println("Соединение закрыто.")
+				close(done)
+				close(stopInput)
+			}()
+			buf := make([]byte, 512)
+			for {
+				n, err := conn.Read(buf)
+				if err != nil || n == 0 {
+					return
+				}
+				fmt.Println("От сервера:\n", string(buf[:n]))
+				if modeChoice != "3" {
+					fmt.Println("Нажмите Enter для запроса информации...")
+				}
+			}
 		}()
 
-		buf := make([]byte, 512)
-		for {
-			n, err := conn.Read(buf)
-			if err != nil || n == 0 {
-				return
-			}
-			fmt.Println("От сервера:\n", string(buf[:n]))
-			if modeChoice != "3" {
-				fmt.Println("Нажмите Enter для запроса информации (или Ctrl+C для завершения работы)...")
-			}
-		}
-	}()
+		if modeChoice == "1" || modeChoice == "2" {
+			fmt.Println("Нажмите Enter для запроса информации...")
+			go func() {
+				reader := bufio.NewReader(os.Stdin)
+				for {
+					select {
+					case <-stopInput:
+						return
+					default:
+						text, _ := reader.ReadString('\n')
+						if strings.TrimSpace(text) == "" {
+							input <- struct{}{}
+						}
+					}
+				}
+			}()
 
-	if modeChoice == "1" || modeChoice == "2" {
-		fmt.Println("Нажмите Enter для запроса информации (или Ctrl+C для завершения работы)...")
-		go func() {
 			for {
 				select {
-				case <-stopInput:
-					return
-				default:
-					text, err := reader.ReadString('\n')
+				case <-done:
+					goto reconnect
+				case <-input:
+					_, err := conn.Write([]byte("get_bytes"))
 					if err != nil {
-						return
-					}
-					text = strings.TrimSpace(text)
-					if text == "" {
-						input <- struct{}{}
+						fmt.Println("Ошибка отправки запроса:", err)
+						goto reconnect
 					}
 				}
 			}
-		}()
-
-		for {
-			select {
-			case <-done:
-				return true
-			case <-input:
-				_, err := conn.Write([]byte("get_bytes"))
-				if err != nil {
-					fmt.Println("Ошибка отправки запроса:", err)
-					return true
-				}
-			}
+		} else {
+			<-done
 		}
-	} else {
-		<-done
-	}
 
-	fmt.Println("Клиент завершил работу.")
-	return true
+	reconnect:
+		conn.Close()
+		fmt.Println("Переподключение через 2 секунды...")
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func main() {
 	reader := bufio.NewReader(os.Stdin)
 
 	for {
-		fmt.Println("Выберите сервер для подключения: ")
-		fmt.Println("1) Сервер №1 (порт 8081) 2) Сервер №2 (порт 6000) 3) К обоим одновременно")
+		fmt.Println("\nВыберите сервер для подключения:")
+		fmt.Println("1) Сервер №1 (порт 8081)")
+		fmt.Println("2) Сервер №2 (порт 6000)")
+		fmt.Println("3) Выход")
 		choice, _ := reader.ReadString('\n')
 		choice = strings.TrimSpace(choice)
-		ip, port := "", ""
 
+		ip, port := "", ""
 		if choice == "1" {
 			ip = "127.0.0.1"
 			port = "8081"
 		} else if choice == "2" {
 			ip = "127.0.0.1"
 			port = "6000"
-		} else if choice == "3" {
-			return
+		} else {
+			break
 		}
 
-		for retry := 0; retry <= 5; retry++ {
-			fmt.Println("Подключение")
-			fmt.Println("Выберите режим: 1) ручной 2) периодический 3) push")
+		fmt.Println("Выберите режим: 1) ручной 2) периодический 3) push")
+		modeChoice, _ := reader.ReadString('\n')
+		modeChoice = strings.TrimSpace(modeChoice)
 
-			modeChoice, _ := reader.ReadString('\n')
-			modeChoice = strings.TrimSpace(modeChoice)
-			success := connectAndWork(modeChoice, ip, port, reader)
-			if success {
-				fmt.Println("Завершено")
-			}
-			time.Sleep(2 * time.Second)
-		}
+		connectAndWork(modeChoice, ip, port)
 	}
 }
