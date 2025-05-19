@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"net"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -55,66 +54,92 @@ func currentLocation() string {
 }
 
 func handleClient(conn net.Conn) {
-
-	defer func(conn net.Conn) {
+	defer func() {
 		err := conn.Close()
 		if err != nil {
 			fmt.Println("Ошибка в процессе разрыва соединения")
 		} else {
-			fmt.Fprintf(os.Stdout, "Клиент %s отключен \n", conn.RemoteAddr().String())
+			fmt.Printf("Клиент %s отключен\n", conn.RemoteAddr().String())
 		}
-	}(conn)
+	}()
 
 	fmt.Println("Подключен новый клиент:", conn.RemoteAddr().String())
 
 	lastDuration := ""
+	mode := ""
+	buf := make([]byte, 512)
+
+	n, err := conn.Read(buf)
+	if err != nil {
+		fmt.Println("Ошибка чтения режима:", err)
+		return
+	}
+	mode = strings.TrimSpace(string(buf[:n]))
+	fmt.Println("Выбран режим:", mode)
 
 	for {
-		buf := make([]byte, 512)
-		n, err := conn.Read(buf)
-		if err != nil {
-			return
-		}
-		req := string(buf[:n])
-		fmt.Println(req)
-
-		if req == "mode:periodic" {
-			for {
-				buf := make([]byte, 512)
-				n, err = conn.Read(buf)
-				printError("", err)
-				fmt.Println(string(buf[:n]))
-				if string(buf[:n]) == "get_bytes" {
-					durationStr := fmt.Sprintf("Текущее время: %s", time.Now().Format("02-01-2006 15:04:05"))
-					info := currentLocation() + uptime()
-					if info != lastDuration {
-						durationStr += info
-						conn.Write([]byte(durationStr))
-						lastDuration = info
-					} else {
-						conn.Write([]byte("Данные не изменились"))
-					}
-				}
+		switch mode {
+		case "mode:periodic":
+			n, err := conn.Read(buf)
+			if err != nil {
+				fmt.Println("Ошибка чтения в режиме periodic:", err)
+				return
 			}
-		} else if req == "mode:push" {
-			for {
+			cmd := strings.TrimSpace(string(buf[:n]))
+			fmt.Println("Periodic cmd:", cmd)
+			if cmd == "get_bytes" {
 				durationStr := fmt.Sprintf("Текущее время: %s", time.Now().Format("02-01-2006 15:04:05"))
 				info := currentLocation() + uptime()
 				if info != lastDuration {
 					durationStr += info
-					conn.Write([]byte(durationStr))
+					_, err := conn.Write([]byte(durationStr))
+					if err != nil {
+						fmt.Println("Ошибка записи в режиме periodic:", err)
+						return
+					}
 					lastDuration = info
+				} else {
+					_, err := conn.Write([]byte("Данные не изменились"))
+					if err != nil {
+						fmt.Println("Ошибка записи в режиме periodic:", err)
+						return
+					}
 				}
+			} else {
+				fmt.Println("Неизвестная команда в режиме periodic:", cmd)
 			}
-		} else if req == "mode:manual" {
-			for {
-				buf := make([]byte, 512)
-				n, err = conn.Read(buf)
-				printError("", err)
-				durationStr := currentLocation()
-				durationStr += uptime()
-				conn.Write([]byte(durationStr))
+
+		case "mode:push":
+			durationStr := fmt.Sprintf("Текущее время: %s", time.Now().Format("02-01-2006 15:04:05"))
+			info := currentLocation() + uptime()
+			if info != lastDuration {
+				durationStr += info
+				_, err := conn.Write([]byte(durationStr))
+				if err != nil {
+					fmt.Println("Ошибка записи в режиме push:", err)
+					return
+				}
+				lastDuration = info
 			}
+			time.Sleep(2 * time.Second)
+
+		case "mode:manual":
+			n, err := conn.Read(buf)
+			if err != nil {
+				fmt.Println("Ошибка чтения в режиме manual:", err)
+				return
+			}
+			_ = strings.TrimSpace(string(buf[:n])) // Можно обработать команду, если нужно
+			durationStr := currentLocation() + uptime()
+			_, err = conn.Write([]byte(durationStr))
+			if err != nil {
+				fmt.Println("Ошибка записи в режиме manual:", err)
+				return
+			}
+
+		default:
+			fmt.Println("Неизвестный режим, завершаем соединение")
+			return
 		}
 	}
 }

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func connectAndWork(ip string, port string) bool {
+func connectAndWork(modeChoice string, ip string, port string, reader *bufio.Reader) bool {
 	conn, err := net.Dial("tcp", ip+":"+port)
 	if err != nil {
 		fmt.Println("Ошибка подключения:", err)
@@ -18,10 +18,6 @@ func connectAndWork(ip string, port string) bool {
 	defer conn.Close()
 
 	fmt.Println("Подключено к", ip+":"+port)
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Println("Выберите режим: 1) ручной 2) периодический 3) push")
-	modeChoice, _ := reader.ReadString('\n')
-	modeChoice = strings.TrimSpace(modeChoice)
 
 	switch modeChoice {
 	case "2":
@@ -37,6 +33,7 @@ func connectAndWork(ip string, port string) bool {
 			return true
 		}
 	default:
+		modeChoice = "1"
 		_, err := conn.Write([]byte("mode:manual"))
 		if err != nil {
 			fmt.Println("Ошибка отправки режима")
@@ -112,24 +109,34 @@ func connectAndWork(ip string, port string) bool {
 func main() {
 	reader := bufio.NewReader(os.Stdin)
 
-	fmt.Println("Connect to: 1) Server1 (port 8081) 2) Server2 (port 6000) 3) Both")
-	choice, _ := reader.ReadString('\n')
-	ip, port := "", ""
+	for {
+		fmt.Println("Выберите сервер для подключения: ")
+		fmt.Println("1) Сервер №1 (порт 8081) 2) Сервер №2 (порт 6000) 3) К обоим одновременно")
+		choice, _ := reader.ReadString('\n')
+		choice = strings.TrimSpace(choice)
+		ip, port := "", ""
 
-	if choice[0] == '1' {
-		ip = "127.0.0.1"
-		port = "8081"
-	} else if choice[0] == '2' {
-		ip = "127.0.0.1"
-		port = "6000"
-	}
-
-	for retry := 0; retry <= 5; retry++ {
-		fmt.Println("Подключение")
-		success := connectAndWork(ip, port)
-		if success {
-			fmt.Println("Завершено")
+		if choice == "1" {
+			ip = "127.0.0.1"
+			port = "8081"
+		} else if choice == "2" {
+			ip = "127.0.0.1"
+			port = "6000"
+		} else if choice == "3" {
+			return
 		}
-		time.Sleep(2 * time.Second)
+
+		for retry := 0; retry <= 5; retry++ {
+			fmt.Println("Подключение")
+			fmt.Println("Выберите режим: 1) ручной 2) периодический 3) push")
+
+			modeChoice, _ := reader.ReadString('\n')
+			modeChoice = strings.TrimSpace(modeChoice)
+			success := connectAndWork(modeChoice, ip, port, reader)
+			if success {
+				fmt.Println("Завершено")
+			}
+			time.Sleep(2 * time.Second)
+		}
 	}
 }
