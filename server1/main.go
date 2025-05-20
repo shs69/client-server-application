@@ -107,10 +107,10 @@ func handleClient(conn net.Conn) {
 			cmd := strings.TrimSpace(string(buf[:n]))
 			fmt.Println("Periodic cmd:", cmd)
 			cmdArray := strings.Split(cmd, ":")
-			reqStr, mode := cmdArray[0], cmdArray[1]
+			reqStr, modeData := cmdArray[0], cmdArray[1]
 
 			if reqStr == "get_bytes" {
-				info := getRightInfo(mode)
+				info := getRightInfo(modeData)
 				if info != lastDuration {
 					_, err := conn.Write([]byte(currentTime() + info))
 					if err != nil {
@@ -129,12 +129,11 @@ func handleClient(conn net.Conn) {
 				fmt.Println("Неизвестная команда в режиме periodic:", cmd)
 			}
 
-		case "mode:push":
-			durationStr := fmt.Sprintf("Текущее время: %s", time.Now().Format("02-01-2006 15:04:05"))
-			info := currentLocation() + uptime()
+		case "mode:push:1", "mode:push:2", "mode:push:3":
+			fmt.Println()
+			info := getRightInfo(strings.Split(mode, ":")[2])
 			if info != lastDuration {
-				durationStr += info
-				_, err := conn.Write([]byte(durationStr))
+				_, err := conn.Write([]byte(currentTime() + info))
 				if err != nil {
 					fmt.Println("Ошибка записи в режиме push:", err)
 					return
@@ -150,10 +149,12 @@ func handleClient(conn net.Conn) {
 				return
 			}
 			cmd := strings.TrimSpace(string(buf[:n]))
-			if cmd == "get_bytes" {
-				_ = strings.TrimSpace(string(buf[:n]))
-				durationStr := currentLocation() + uptime()
-				_, err = conn.Write([]byte(durationStr))
+			fmt.Println("Periodic cmd:", cmd)
+			cmdArray := strings.Split(cmd, ":")
+			reqStr, modeData := cmdArray[0], cmdArray[1]
+
+			if reqStr == "get_bytes" {
+				_, err = conn.Write([]byte(currentTime() + getRightInfo(modeData)))
 				if err != nil {
 					fmt.Println("Ошибка записи в режиме manual:", err)
 					return

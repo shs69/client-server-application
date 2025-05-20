@@ -24,7 +24,7 @@ func connectAndWork(modeChoice, ip, port, dataChoice string) string {
 		case "2":
 			conn.Write([]byte("mode:periodic"))
 		case "3":
-			conn.Write([]byte("mode:push"))
+			conn.Write([]byte("mode:push:" + dataChoice))
 		default:
 			modeChoice = "1"
 			conn.Write([]byte("mode:manual"))
@@ -32,7 +32,7 @@ func connectAndWork(modeChoice, ip, port, dataChoice string) string {
 		}
 
 		if modeChoice == "1" || modeChoice == "2" {
-			fmt.Println("Введите команду (mode/m, switch/s, exit/e,  d/data) или нажмите Enter для запроса информации...")
+			fmt.Println("Введите команду (mode/m, switch/s, d/data, exit/e) или нажмите Enter для запроса информации...")
 		}
 
 		done := make(chan struct{})
@@ -51,7 +51,7 @@ func connectAndWork(modeChoice, ip, port, dataChoice string) string {
 					return
 				}
 				fmt.Println("От сервера:\n", string(buf[:n]))
-				fmt.Println("Введите команду (mode/m, switch/s, exit/e,  d/data) или нажмите Enter для запроса информации...")
+				fmt.Println("Введите команду (mode/m, switch/s, d/data, exit/e) или нажмите Enter для запроса информации...")
 			}
 		}()
 
@@ -126,9 +126,11 @@ func main() {
 		if choice == "1" {
 			ip = "127.0.0.1"
 			port = "8081"
+			goto chooseData1
 		} else if choice == "2" {
 			ip = "127.0.0.1"
 			port = "6000"
+			goto chooseData2
 		} else {
 			fmt.Println("Завершение работы клиента.")
 			break
@@ -142,6 +144,14 @@ func main() {
 		dataChoice, _ := reader.ReadString('\n')
 		dataChoice = strings.TrimSpace(dataChoice)
 
+	chooseData2:
+		fmt.Println("Какие данные вы хотите получить?")
+		fmt.Println("1) Количество и процент свободной физической памяти")
+		fmt.Println("2) Время работы серверного процесса")
+		fmt.Println("3) Все данные")
+		dataChoices, _ := reader.ReadString('\n')
+		dataChoices = strings.TrimSpace(dataChoices)
+
 	reconnect:
 		fmt.Println("Выберите режим: 1) ручной 2) периодический 3) push")
 		modeChoice, _ := reader.ReadString('\n')
@@ -154,7 +164,12 @@ func main() {
 			switch cmd {
 			case "data", "d":
 				fmt.Println("Смена данных")
-				goto chooseData1
+				switch modeChoice {
+				case "1":
+					goto chooseData1
+				case "2":
+					goto chooseData2
+				}
 			case "mode", "m":
 				fmt.Println("Смена режима.")
 				goto reconnect
