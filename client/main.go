@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func connectAndWork(modeChoice, ip, port string) {
+func connectAndWork(modeChoice, ip, port, dataChoice string) string {
 	for {
 		conn, err := net.Dial("tcp", ip+":"+port)
 		if err != nil {
@@ -31,13 +31,16 @@ func connectAndWork(modeChoice, ip, port string) {
 			fmt.Println("Режим: ручной")
 		}
 
+		if modeChoice == "1" || modeChoice == "2" {
+			fmt.Println("Введите команду (mode/m, switch/s, exit/e,  d/data) или нажмите Enter для запроса информации...")
+		}
+
 		done := make(chan struct{})
-		input := make(chan struct{})
+		command := make(chan string)
 		stopInput := make(chan struct{})
 
 		go func() {
 			defer func() {
-				fmt.Println("Соединение закрыто.")
 				close(done)
 				close(stopInput)
 			}()
@@ -48,49 +51,62 @@ func connectAndWork(modeChoice, ip, port string) {
 					return
 				}
 				fmt.Println("От сервера:\n", string(buf[:n]))
-				if modeChoice != "3" {
-					fmt.Println("Нажмите Enter для запроса информации...")
+				fmt.Println("Введите команду (mode/m, switch/s, exit/e,  d/data) или нажмите Enter для запроса информации...")
+			}
+		}()
+
+		go func() {
+			reader := bufio.NewReader(os.Stdin)
+			for {
+				select {
+				case <-stopInput:
+					return
+				default:
+					text, _ := reader.ReadString('\n')
+					text = strings.TrimSpace(text)
+
+					switch text {
+					case "mode", "m", "switch", "s", "exit", "e", "data", "d":
+						command <- text
+					case "":
+						if modeChoice == "1" || modeChoice == "2" {
+							command <- "get_bytes"
+						} else {
+							fmt.Println("В режиме push Enter ничего не отправляет. Используйте команды mode/m, switch/s, exit/e.")
+						}
+					default:
+						fmt.Println("Неизвестная команда.")
+					}
 				}
 			}
 		}()
 
-		if modeChoice == "1" || modeChoice == "2" {
-			fmt.Println("Нажмите Enter для запроса информации...")
-			go func() {
-				reader := bufio.NewReader(os.Stdin)
-				for {
-					select {
-					case <-stopInput:
-						return
-					default:
-						text, _ := reader.ReadString('\n')
-						if strings.TrimSpace(text) == "" {
-							input <- struct{}{}
-						}
+		for {
+			select {
+			case <-done:
+				return "reconnect"
+			case cmd := <-command:
+				var request string
+				if cmd == "get_bytes" {
+					switch dataChoice {
+					case "1":
+						request = "get_bytes:uptime"
+					case "2":
+						request = "get_bytes:tz"
+					case "3":
+						request = "get_bytes:both"
 					}
-				}
-			}()
-
-			for {
-				select {
-				case <-done:
-					goto reconnect
-				case <-input:
-					_, err := conn.Write([]byte("get_bytes"))
+					_, err := conn.Write([]byte(request))
 					if err != nil {
 						fmt.Println("Ошибка отправки запроса:", err)
-						goto reconnect
+						return "reconnect"
 					}
+				} else {
+					conn.Close()
+					return cmd
 				}
 			}
-		} else {
-			<-done
 		}
-
-	reconnect:
-		conn.Close()
-		fmt.Println("Переподключение через 2 секунды...")
-		time.Sleep(2 * time.Second)
 	}
 }
 
@@ -98,6 +114,7 @@ func main() {
 	reader := bufio.NewReader(os.Stdin)
 
 	for {
+	chooseServer:
 		fmt.Println("\nВыберите сервер для подключения:")
 		fmt.Println("1) Сервер №1 (порт 8081)")
 		fmt.Println("2) Сервер №2 (порт 6000)")
@@ -113,13 +130,45 @@ func main() {
 			ip = "127.0.0.1"
 			port = "6000"
 		} else {
+			fmt.Println("Завершение работы клиента.")
 			break
 		}
 
+	chooseData1:
+		fmt.Println("Какие данные вы хотите получить?")
+		fmt.Println("1) Продолжительность текущего сеанса работы")
+		fmt.Println("2) Текущий часовой пояс")
+		fmt.Println("3) Все данные")
+		dataChoice, _ := reader.ReadString('\n')
+		dataChoice = strings.TrimSpace(dataChoice)
+
+	reconnect:
 		fmt.Println("Выберите режим: 1) ручной 2) периодический 3) push")
 		modeChoice, _ := reader.ReadString('\n')
 		modeChoice = strings.TrimSpace(modeChoice)
 
-		connectAndWork(modeChoice, ip, port)
+	modeLoop:
+		for {
+			cmd := connectAndWork(modeChoice, ip, port, dataChoice)
+
+			switch cmd {
+			case "data", "d":
+				fmt.Println("Смена данных")
+				goto chooseData1
+			case "mode", "m":
+				fmt.Println("Смена режима.")
+				goto reconnect
+			case "switch", "s":
+				fmt.Println("Смена сервера.")
+				goto chooseServer
+			case "exit", "e":
+				fmt.Println("Завершение работы клиента.")
+				return
+			default:
+				fmt.Println("Переподключение...")
+				time.Sleep(2 * time.Second)
+				goto modeLoop
+			}
+		}
 	}
 }

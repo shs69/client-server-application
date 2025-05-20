@@ -53,6 +53,24 @@ func currentLocation() string {
 	return durationStr
 }
 
+func currentTime() string {
+	return fmt.Sprintf("Текущее время: %s", time.Now().Format("02-01-2006 15:04:05"))
+}
+
+func getRightInfo(typeInfo string) string {
+	var currentInfo string
+	switch typeInfo {
+	case "uptime":
+		currentInfo += uptime()
+	case "tz":
+		currentInfo += currentLocation()
+	case "both":
+		currentInfo += uptime() + currentLocation()
+	}
+
+	return currentInfo
+}
+
 func handleClient(conn net.Conn) {
 	defer func() {
 		err := conn.Close()
@@ -85,14 +103,16 @@ func handleClient(conn net.Conn) {
 				fmt.Println("Ошибка чтения в режиме periodic:", err)
 				return
 			}
+
 			cmd := strings.TrimSpace(string(buf[:n]))
 			fmt.Println("Periodic cmd:", cmd)
-			if cmd == "get_bytes" {
-				durationStr := fmt.Sprintf("Текущее время: %s", time.Now().Format("02-01-2006 15:04:05"))
-				info := currentLocation() + uptime()
+			cmdArray := strings.Split(cmd, ":")
+			reqStr, mode := cmdArray[0], cmdArray[1]
+
+			if reqStr == "get_bytes" {
+				info := getRightInfo(mode)
 				if info != lastDuration {
-					durationStr += info
-					_, err := conn.Write([]byte(durationStr))
+					_, err := conn.Write([]byte(currentTime() + info))
 					if err != nil {
 						fmt.Println("Ошибка записи в режиме periodic:", err)
 						return
@@ -129,14 +149,16 @@ func handleClient(conn net.Conn) {
 				fmt.Println("Ошибка чтения в режиме manual:", err)
 				return
 			}
-			_ = strings.TrimSpace(string(buf[:n])) // Можно обработать команду, если нужно
-			durationStr := currentLocation() + uptime()
-			_, err = conn.Write([]byte(durationStr))
-			if err != nil {
-				fmt.Println("Ошибка записи в режиме manual:", err)
-				return
+			cmd := strings.TrimSpace(string(buf[:n]))
+			if cmd == "get_bytes" {
+				_ = strings.TrimSpace(string(buf[:n]))
+				durationStr := currentLocation() + uptime()
+				_, err = conn.Write([]byte(durationStr))
+				if err != nil {
+					fmt.Println("Ошибка записи в режиме manual:", err)
+					return
+				}
 			}
-
 		default:
 			fmt.Println("Неизвестный режим, завершаем соединение")
 			return
