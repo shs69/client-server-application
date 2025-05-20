@@ -41,35 +41,27 @@ func startServer(port string) error {
 }
 
 func timeServer(startTime time.Time) string {
-	return fmt.Sprintf("\n Продолжительность текущего сеанса работы:%d", int(time.Since(startTime).Seconds()))
+	return fmt.Sprintf("\n Время работы серверного процесса: %d секунд", int(time.Since(startTime).Seconds()))
 }
 
 func freeMem() string {
+	var mem string
 	switch runtime.GOOS {
 	case "darwin":
-		command := "vm_stat | awk " +
-			"'/free/ {free_bytes=$3 * 4096} " +
-			"/active/ {active_bytes=$3 * 4096} " +
-			"/inactive/ {inactive_bytes=$3 * 4096} " +
-			"/speculative/ {speculative_bytes=$3 * 4096} " +
-			"END {total_mem=(free_bytes + active_bytes + inactive_bytes + speculative_bytes); " +
-			"printf(\"Свободно: %.1fGB (%.1f%%)\\n\", free_bytes/1024/1024/1024, (free_bytes/total_mem)*100)}'"
-		out, err := exec.Command(command).Output()
+		command := "vm_stat | awk '/free/ {free_bytes=$3 * 4096} /active/ {active_bytes=$3 * 4096} /inactive/ {inactive_bytes=$3 * 4096} /speculative/ {speculative_bytes=$3 * 4096} END {total_mem=(free_bytes + active_bytes + inactive_bytes + speculative_bytes); printf(\"Свободно: %.3fGB (%.3f%%)\\n\", free_bytes/1024/1024/1024, (free_bytes/total_mem)*100)}'"
+		out, err := exec.Command("sh", "-c", command).Output()
 		if err != nil {
 			return fmt.Sprint("Ошибка вызова команды", err)
 		}
-		return string(out)
+		mem = "\n " + string(out)
 	case "linux":
 		out, err := exec.Command("free -h | awk '/^Mem:/ {printf(\"Свободно: %s (%.1f%%)\\n\", $4, ($4/$2)*100)}'\n").Output()
 		if err != nil {
 			return fmt.Sprint("Ошибка вызова команды", err)
 		}
-		return string(out)
+		mem = "\n " + string(out)
 	}
-
-	zone, offset := time.Now().Zone()
-	durationStr := fmt.Sprintf("\n Свободная физическая память : %s %d", zone, offset/3600)
-	return durationStr
+	return mem
 }
 
 func currentTime() string {
@@ -79,11 +71,11 @@ func currentTime() string {
 func getRightInfo(typeInfo string, startTime time.Time) string {
 	var currentInfo string
 	switch typeInfo {
-	case "servertime":
-		currentInfo += timeServer(startTime)
-	case "freemem":
+	case "1":
 		currentInfo += freeMem()
-	case "both":
+	case "2":
+		currentInfo += timeServer(startTime)
+	case "3":
 		currentInfo += timeServer(startTime) + freeMem()
 	}
 
@@ -127,6 +119,7 @@ func handleClient(conn net.Conn, startTime time.Time) {
 			fmt.Println("Periodic cmd:", cmd)
 			cmdArray := strings.Split(cmd, ":")
 			reqStr, modeData := cmdArray[0], cmdArray[1]
+			fmt.Println(reqStr, modeData)
 
 			if reqStr == "get_bytes" {
 				info := getRightInfo(modeData, startTime)

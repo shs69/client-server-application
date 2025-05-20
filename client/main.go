@@ -9,102 +9,118 @@ import (
 	"time"
 )
 
-func connectAndWork(modeChoice, ip, port, dataChoice string) string {
-	for {
-		conn, err := net.Dial("tcp", ip+":"+port)
+type ServerConfig struct {
+	IP    string
+	Port  string
+	Label string // например: Сервер №1
+	Data  string // выбранные данные для запроса
+}
+
+func connectAndWorkParallel(servers []ServerConfig, mode string) string {
+	conns := make([]net.Conn, len(servers))
+	for i, srv := range servers {
+		conn, err := net.Dial("tcp", srv.IP+":"+srv.Port)
 		if err != nil {
-			fmt.Println("Ошибка подключения:", err)
-			time.Sleep(2 * time.Second)
+			fmt.Printf("❌ Ошибка подключения к %s (%s:%s): %v\n", srv.Label, srv.IP, srv.Port, err)
 			continue
 		}
+		conns[i] = conn
+		fmt.Printf("📥 Подключено к %s (%s:%s)\n", srv.Label, srv.IP, srv.Port)
 
-		fmt.Println("Подключено к", ip+":"+port)
-
-		switch modeChoice {
+		var modeStr string
+		switch mode {
 		case "2":
-			conn.Write([]byte("mode:periodic"))
+			modeStr = "mode:periodic"
 		case "3":
-			conn.Write([]byte("mode:push:" + dataChoice))
+			modeStr = "mode:push:" + srv.Data
 		default:
-			modeChoice = "1"
-			conn.Write([]byte("mode:manual"))
-			fmt.Println("Режим: ручной")
+			modeStr = "mode:manual"
+			fmt.Printf("Режим: ручной для %s\n", srv.Label)
 		}
+		conn.Write([]byte(modeStr))
+	}
 
-		if modeChoice == "1" || modeChoice == "2" {
-			fmt.Println("Введите команду (mode/m, switch/s, d/data, exit/e) или нажмите Enter для запроса информации...")
+	for i, conn := range conns {
+		if conn == nil {
+			continue
 		}
-
-		done := make(chan struct{})
-		command := make(chan string)
-		stopInput := make(chan struct{})
-
-		go func() {
-			defer func() {
-				close(done)
-				close(stopInput)
-			}()
-			buf := make([]byte, 512)
+		go func(c net.Conn, srv ServerConfig) {
+			buf := make([]byte, 1024)
 			for {
-				n, err := conn.Read(buf)
-				if err != nil || n == 0 {
+				n, err := c.Read(buf)
+				if err != nil {
+					fmt.Printf("🔌 Соединение с %s (%s:%s) закрыто.\n", srv.Label, srv.IP, srv.Port)
 					return
 				}
-				fmt.Println("От сервера:\n", string(buf[:n]))
-				fmt.Println("Введите команду (mode/m, switch/s, d/data, exit/e) или нажмите Enter для запроса информации...")
-			}
-		}()
-
-		go func() {
-			reader := bufio.NewReader(os.Stdin)
-			for {
-				select {
-				case <-stopInput:
-					return
-				default:
-					text, _ := reader.ReadString('\n')
-					text = strings.TrimSpace(text)
-
-					switch text {
-					case "mode", "m", "switch", "s", "exit", "e", "data", "d":
-						command <- text
-					case "":
-						if modeChoice == "1" || modeChoice == "2" {
-							command <- "get_bytes"
-						} else {
-							fmt.Println("В режиме push Enter ничего не отправляет. Используйте команды mode/m, switch/s, exit/e.")
-						}
-					default:
-						fmt.Println("Неизвестная команда.")
+				fmt.Printf("\n📨 [%s:%s] От сервера №%d :\n%s\n", srv.IP, srv.Port, i+1, string(buf[:n]))
+				if len(servers) != 2 {
+					fmt.Println("\nВведите команду (mode/m, switch/s, d/data, exit/e) или нажмите Enter для запроса информации:")
+				} else {
+					if i == 1 {
+						time.Sleep(50 * time.Millisecond)
+						fmt.Println("\nВведите команду (mode/m, switch/s, d/data, exit/e) или нажмите Enter для запроса информации:")
 					}
 				}
 			}
-		}()
+		}(conn, servers[i])
+	}
 
-		for {
-			select {
-			case <-done:
-				return "reconnect"
-			case cmd := <-command:
-				var request string
-				if cmd == "get_bytes" {
-					switch dataChoice {
-					case "1":
-						request = "get_bytes:uptime"
-					case "2":
-						request = "get_bytes:tz"
-					case "3":
-						request = "get_bytes:both"
-					}
-					_, err := conn.Write([]byte(request))
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Println("\nВведите команду (mode/m, switch/s, d/data, exit/e) или нажмите Enter для запроса информации:")
+	for {
+		text, _ := reader.ReadString('\n')
+		text = strings.TrimSpace(text)
+
+		if text == "" && (mode == "1" || mode == "2") {
+			for _, srv := range servers {
+				if srv.Data == "" {
+					continue
+				}
+			}
+			for i, c := range conns {
+				if c != nil {
+					var request string
+					request = "get_bytes:" + servers[i].Data
+					_, err := c.Write([]byte(request))
 					if err != nil {
-						fmt.Println("Ошибка отправки запроса:", err)
+						fmt.Printf("Ошибка отправки запроса серверу %s: %v\n", servers[i].Label, err)
 						return "reconnect"
 					}
-				} else {
-					conn.Close()
-					return cmd
 				}
+			}
+		} else {
+			switch text {
+			case "exit", "e":
+				fmt.Println("Завершение работы клиента.")
+				for _, c := range conns {
+					if c != nil {
+						c.Close()
+					}
+				}
+				os.Exit(0)
+			case "mode", "m":
+				for _, c := range conns {
+					if c != nil {
+						c.Close()
+					}
+				}
+				return "mode"
+			case "switch", "s":
+				for _, c := range conns {
+					if c != nil {
+						c.Close()
+					}
+				}
+				return "switch"
+			case "data", "d":
+				for _, c := range conns {
+					if c != nil {
+						c.Close()
+					}
+				}
+				return "data"
+			default:
+				fmt.Println("Неизвестная команда.")
 			}
 		}
 	}
@@ -113,72 +129,67 @@ func connectAndWork(modeChoice, ip, port, dataChoice string) string {
 func main() {
 	reader := bufio.NewReader(os.Stdin)
 
+chooseServer:
 	for {
-	chooseServer:
 		fmt.Println("\nВыберите сервер для подключения:")
-		fmt.Println("1) Сервер №1 (порт 8081)")
-		fmt.Println("2) Сервер №2 (порт 6000)")
-		fmt.Println("3) Выход")
+		fmt.Println("1) Только Сервер №1 (порт 8081)")
+		fmt.Println("2) Только Сервер №2 (порт 6060)")
+		fmt.Println("3) Подключиться к обоим серверам")
+		fmt.Println("4) Выход")
 		choice, _ := reader.ReadString('\n')
 		choice = strings.TrimSpace(choice)
 
-		ip, port := "", ""
-		if choice == "1" {
-			ip = "127.0.0.1"
-			port = "8081"
-			goto chooseData1
-		} else if choice == "2" {
-			ip = "127.0.0.1"
-			port = "6000"
-			goto chooseData2
-		} else {
+		if choice == "4" {
 			fmt.Println("Завершение работы клиента.")
-			break
+			return
 		}
 
-	chooseData1:
-		fmt.Println("Какие данные вы хотите получить?")
-		fmt.Println("1) Продолжительность текущего сеанса работы")
-		fmt.Println("2) Текущий часовой пояс")
-		fmt.Println("3) Все данные")
-		dataChoice, _ := reader.ReadString('\n')
-		dataChoice = strings.TrimSpace(dataChoice)
+		var servers []ServerConfig
 
-	chooseData2:
-		fmt.Println("Какие данные вы хотите получить?")
-		fmt.Println("1) Количество и процент свободной физической памяти")
-		fmt.Println("2) Время работы серверного процесса")
-		fmt.Println("3) Все данные")
-		dataChoices, _ := reader.ReadString('\n')
-		dataChoices = strings.TrimSpace(dataChoices)
+		switch choice {
+		case "1":
+			dataChoice := chooseDataForServer(reader, "1", "Сервер №1 (127.0.0.1:8081)")
+			servers = []ServerConfig{
+				{IP: "127.0.0.1", Port: "8081", Label: "Сервер №1", Data: dataChoice},
+			}
+		case "2":
+			dataChoice := chooseDataForServer(reader, "2", "Сервер №2 (127.0.0.1:6060)")
+			servers = []ServerConfig{
+				{IP: "127.0.0.1", Port: "6060", Label: "Сервер №2", Data: dataChoice},
+			}
+		case "3":
+			dataChoice1 := chooseDataForServer(reader, "1", "Сервер №1 (127.0.0.1:8081)")
+			dataChoice2 := chooseDataForServer(reader, "2", "Сервер №2 (127.0.0.1:6060)")
+			servers = []ServerConfig{
+				{IP: "127.0.0.1", Port: "8081", Label: "Сервер №1", Data: dataChoice1},
+				{IP: "127.0.0.1", Port: "6060", Label: "Сервер №2", Data: dataChoice2},
+			}
+		default:
+			fmt.Println("Некорректный выбор. Попробуйте ещё раз.")
+			continue
+		}
 
 	reconnect:
-		fmt.Println("Выберите режим: 1) ручной 2) периодический 3) push")
+		fmt.Println("Выберите режим: 1) Ручной 2) Периодический 3) Push")
 		modeChoice, _ := reader.ReadString('\n')
 		modeChoice = strings.TrimSpace(modeChoice)
 
 	modeLoop:
 		for {
-			cmd := connectAndWork(modeChoice, ip, port, dataChoice)
+			cmd := connectAndWorkParallel(servers, modeChoice)
 
 			switch cmd {
-			case "data", "d":
+			case "data":
 				fmt.Println("Смена данных")
-				switch modeChoice {
-				case "1":
-					goto chooseData1
-				case "2":
-					goto chooseData2
+				for i := range servers {
+					servers[i].Data = chooseDataForServer(reader, fmt.Sprintf("%d", i+1), servers[i].Label)
 				}
-			case "mode", "m":
+			case "mode":
 				fmt.Println("Смена режима.")
 				goto reconnect
-			case "switch", "s":
+			case "switch":
 				fmt.Println("Смена сервера.")
 				goto chooseServer
-			case "exit", "e":
-				fmt.Println("Завершение работы клиента.")
-				return
 			default:
 				fmt.Println("Переподключение...")
 				time.Sleep(2 * time.Second)
@@ -186,4 +197,23 @@ func main() {
 			}
 		}
 	}
+}
+
+func chooseDataForServer(reader *bufio.Reader, serverNum string, serverLabel string) string {
+	fmt.Println(serverNum)
+	if serverNum == "1" {
+		fmt.Printf("Какие данные вы хотите получать от %s?\n", serverLabel)
+		fmt.Println("1) Продолжительность текущего сеанса работы")
+		fmt.Println("2) Текущий часовой пояс")
+		fmt.Println("3) Все данные")
+	} else if serverNum == "2" {
+		fmt.Printf("Какие данные вы хотите получать от %s?\n", serverLabel)
+		fmt.Println("1) Количество и процент свободной физической памяти")
+		fmt.Println("2) Время работы серверного процесса")
+		fmt.Println("3) Все данные")
+	}
+
+	dataChoice, _ := reader.ReadString('\n')
+	dataChoice = strings.TrimSpace(dataChoice)
+	return dataChoice
 }

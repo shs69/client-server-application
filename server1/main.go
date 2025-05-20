@@ -60,11 +60,11 @@ func currentTime() string {
 func getRightInfo(typeInfo string) string {
 	var currentInfo string
 	switch typeInfo {
-	case "uptime":
+	case "1":
 		currentInfo += uptime()
-	case "tz":
+	case "2":
 		currentInfo += currentLocation()
-	case "both":
+	case "3":
 		currentInfo += uptime() + currentLocation()
 	}
 
