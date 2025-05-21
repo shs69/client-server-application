@@ -160,6 +160,7 @@ func handleClient(conn net.Conn) {
 					return
 				}
 			}
+
 		default:
 			fmt.Println("Неизвестный режим, завершаем соединение")
 			return

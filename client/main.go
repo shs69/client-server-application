@@ -12,20 +12,20 @@ import (
 type ServerConfig struct {
 	IP    string
 	Port  string
-	Label string // например: Сервер №1
-	Data  string // выбранные данные для запроса
+	Label string
+	Data  string
 }
 
-func connectAndWorkParallel(servers []ServerConfig, mode string) string {
+func connectAndWork(servers []ServerConfig, mode string) string {
 	conns := make([]net.Conn, len(servers))
 	for i, srv := range servers {
 		conn, err := net.Dial("tcp", srv.IP+":"+srv.Port)
 		if err != nil {
-			fmt.Printf("❌ Ошибка подключения к %s (%s:%s): %v\n", srv.Label, srv.IP, srv.Port, err)
+			fmt.Printf("Ошибка подключения к %s (%s:%s): %v\n", srv.Label, srv.IP, srv.Port, err)
 			continue
 		}
 		conns[i] = conn
-		fmt.Printf("📥 Подключено к %s (%s:%s)\n", srv.Label, srv.IP, srv.Port)
+		fmt.Printf("Подключено к %s (%s:%s)\n", srv.Label, srv.IP, srv.Port)
 
 		var modeStr string
 		switch mode {
@@ -40,87 +40,90 @@ func connectAndWorkParallel(servers []ServerConfig, mode string) string {
 		conn.Write([]byte(modeStr))
 	}
 
+	done := make(chan struct{})
+
 	for i, conn := range conns {
 		if conn == nil {
-			continue
+			return "reconnect"
 		}
-		go func(c net.Conn, srv ServerConfig) {
+		go func(i int, c net.Conn, srv ServerConfig) {
 			buf := make([]byte, 1024)
 			for {
 				n, err := c.Read(buf)
 				if err != nil {
-					fmt.Printf("🔌 Соединение с %s (%s:%s) закрыто.\n", srv.Label, srv.IP, srv.Port)
-					return
+					fmt.Printf("Соединение с %s (%s:%s) закрыто.\n", srv.Label, srv.IP, srv.Port)
+					c.Close()
+					done <- struct{}{}
+					break
 				}
-				fmt.Printf("\n📨 [%s:%s] От сервера №%d :\n%s\n", srv.IP, srv.Port, i+1, string(buf[:n]))
+				fmt.Printf("\n[%s:%s] От %s :\n%s\n", srv.IP, srv.Port, srv.Label, string(buf[:n]))
 				if len(servers) != 2 {
 					fmt.Println("\nВведите команду (mode/m, switch/s, d/data, exit/e) или нажмите Enter для запроса информации:")
 				} else {
 					if i == 1 {
-						time.Sleep(50 * time.Millisecond)
 						fmt.Println("\nВведите команду (mode/m, switch/s, d/data, exit/e) или нажмите Enter для запроса информации:")
 					}
 				}
 			}
-		}(conn, servers[i])
+		}(i, conn, servers[i])
 	}
 
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Println("\nВведите команду (mode/m, switch/s, d/data, exit/e) или нажмите Enter для запроса информации:")
 	for {
-		text, _ := reader.ReadString('\n')
-		text = strings.TrimSpace(text)
+		select {
+		case <-done:
+			return "reconnect"
+		default:
+			text, _ := reader.ReadString('\n')
+			text = strings.TrimSpace(text)
 
-		if text == "" && (mode == "1" || mode == "2") {
-			for _, srv := range servers {
-				if srv.Data == "" {
-					continue
-				}
-			}
-			for i, c := range conns {
-				if c != nil {
-					var request string
-					request = "get_bytes:" + servers[i].Data
-					_, err := c.Write([]byte(request))
-					if err != nil {
-						fmt.Printf("Ошибка отправки запроса серверу %s: %v\n", servers[i].Label, err)
-						return "reconnect"
-					}
-				}
-			}
-		} else {
-			switch text {
-			case "exit", "e":
-				fmt.Println("Завершение работы клиента.")
-				for _, c := range conns {
+			if text == "" && (mode == "1" || mode == "2") {
+				for i, c := range conns {
 					if c != nil {
-						c.Close()
+						var request string
+						request = "get_bytes:" + servers[i].Data + "\n"
+						_, err := c.Write([]byte(request))
+						if err != nil {
+							fmt.Printf("Ошибка отправки запроса серверу %s: %v\n", servers[i].Label, err)
+							return "reconnect"
+						}
 					}
 				}
-				os.Exit(0)
-			case "mode", "m":
-				for _, c := range conns {
-					if c != nil {
-						c.Close()
+			} else {
+				switch text {
+				case "exit", "e":
+					fmt.Println("Завершение работы клиента.")
+					for _, c := range conns {
+						if c != nil {
+							c.Close()
+						}
 					}
-				}
-				return "mode"
-			case "switch", "s":
-				for _, c := range conns {
-					if c != nil {
-						c.Close()
+					os.Exit(0)
+				case "mode", "m":
+					for _, c := range conns {
+						if c != nil {
+							c.Close()
+						}
 					}
-				}
-				return "switch"
-			case "data", "d":
-				for _, c := range conns {
-					if c != nil {
-						c.Close()
+					return "mode"
+				case "switch", "s":
+					for _, c := range conns {
+						if c != nil {
+							c.Close()
+						}
 					}
+					return "switch"
+				case "data", "d":
+					for _, c := range conns {
+						if c != nil {
+							c.Close()
+						}
+					}
+					return "data"
+				default:
+					fmt.Println("Неизвестная команда.")
 				}
-				return "data"
-			default:
-				fmt.Println("Неизвестная команда.")
 			}
 		}
 	}
@@ -128,9 +131,11 @@ func connectAndWorkParallel(servers []ServerConfig, mode string) string {
 
 func main() {
 	reader := bufio.NewReader(os.Stdin)
+	//ip := "127.0.0.1"
+	dockerIP := "host.docker.internal"
 
-chooseServer:
 	for {
+	chooseServer:
 		fmt.Println("\nВыберите сервер для подключения:")
 		fmt.Println("1) Только Сервер №1 (порт 8081)")
 		fmt.Println("2) Только Сервер №2 (порт 6060)")
@@ -150,19 +155,19 @@ chooseServer:
 		case "1":
 			dataChoice := chooseDataForServer(reader, "1", "Сервер №1 (127.0.0.1:8081)")
 			servers = []ServerConfig{
-				{IP: "127.0.0.1", Port: "8081", Label: "Сервер №1", Data: dataChoice},
+				{IP: dockerIP, Port: "8081", Label: "Сервер №1", Data: dataChoice},
 			}
 		case "2":
 			dataChoice := chooseDataForServer(reader, "2", "Сервер №2 (127.0.0.1:6060)")
 			servers = []ServerConfig{
-				{IP: "127.0.0.1", Port: "6060", Label: "Сервер №2", Data: dataChoice},
+				{IP: dockerIP, Port: "6060", Label: "Сервер №2", Data: dataChoice},
 			}
 		case "3":
 			dataChoice1 := chooseDataForServer(reader, "1", "Сервер №1 (127.0.0.1:8081)")
 			dataChoice2 := chooseDataForServer(reader, "2", "Сервер №2 (127.0.0.1:6060)")
 			servers = []ServerConfig{
-				{IP: "127.0.0.1", Port: "8081", Label: "Сервер №1", Data: dataChoice1},
-				{IP: "127.0.0.1", Port: "6060", Label: "Сервер №2", Data: dataChoice2},
+				{IP: dockerIP, Port: "8081", Label: "Сервер №1", Data: dataChoice1},
+				{IP: dockerIP, Port: "6060", Label: "Сервер №2", Data: dataChoice2},
 			}
 		default:
 			fmt.Println("Некорректный выбор. Попробуйте ещё раз.")
@@ -176,7 +181,7 @@ chooseServer:
 
 	modeLoop:
 		for {
-			cmd := connectAndWorkParallel(servers, modeChoice)
+			cmd := connectAndWork(servers, modeChoice)
 
 			switch cmd {
 			case "data":
@@ -192,7 +197,7 @@ chooseServer:
 				goto chooseServer
 			default:
 				fmt.Println("Переподключение...")
-				time.Sleep(2 * time.Second)
+				time.Sleep(1 * time.Second)
 				goto modeLoop
 			}
 		}
